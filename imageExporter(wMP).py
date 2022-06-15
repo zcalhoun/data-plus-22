@@ -101,6 +101,9 @@ def generateURL(coord, height, width, res, filtered, crs, RGB):
         print(e)
         print(f"\nimage at {(lat, lon)} missing one or more RGB bands")
         pass
+    
+    a = 'The image at ' +str(lat)+' '+ str(lon) + ' is exported.'
+    logger.info(a)
 
 
 if __name__ == "__main__":
@@ -115,8 +118,6 @@ if __name__ == "__main__":
                     filemode='a',
                     level = logging.INFO
                     )
-    a = 'The image at ' +str(coord[0])+' '+ str(coord[1]) + ' is exported.'
-    logger.info(a)
 
 
     output_dir = '/home/sl636/climateEye/exported_images'
