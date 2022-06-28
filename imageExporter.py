@@ -6,16 +6,12 @@ import ee
 import pandas as pd
 import numpy as np
 import time
-import logging
-from geetools import batch
-from tqdm import tqdm
 from argparse import ArgumentParser
 import requests
 import math
 import logging
 import multiprocessing
 import requests
-import shutil
 from retry import retry
 import multiprocessing
 import os
@@ -42,7 +38,7 @@ def boundingBox(lat, lon, size, res):
     earth_radius = 6371000
     angular_distance = math.degrees(0.5 * ((size * res) / earth_radius))
     osLat = angular_distance
-    osLon = angular_distance
+    osLon = angular_distance  # / math.cos(math.radians(lat))
     xMin = lon - osLon
     xMax = lon + osLon
     yMin = lat - osLat
@@ -50,18 +46,13 @@ def boundingBox(lat, lon, size, res):
     return xMin, xMax, yMin, yMax
 
 
-# dictionnary to hold parameters specific for each dataset
-dict = {ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"): {'name': 'landsat', 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'min': 0.0, 'max': 0.5},
-        ee.ImageCollection("USDA/NAIP/DOQQ"): {'name': 'naip', 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'min': 0.0, 'max': 255.0},
-        ee.ImageCollection("COPERNICUS/S2_SR"): {'name': 'sentinel', 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'min': 0.0, 'max': 0.3}}
-
-
 @retry(tries=10, delay=2, backoff=2)
-def generateURL(coord, height, width, res, filtered, crs, RGB, output_dir):
+def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpened=False, panchromatic_band='B8'):
     """ takes coordinates of center point, desired height,
-    width of image, resolution of dataset, filtered dataset (e.g. by date),
-    projection, and corresponding RGB bands, calls boundingBox to generate
-    Geometry around center point, generates URL of desired image if the area
+    width of image, name of dataset, filtered dataset (e.g. by date),
+    projection, output_directory path, whether to download pan-sharpened images,
+    and the corresponding panchromatic_band (if available), calls boundingBox to
+    generate Geometry around center point, generates URL of desired image if the area
     contains all RGB bands, and downloads image to disk
 
     :param coord: latitude and longitude of center point
@@ -70,24 +61,48 @@ def generateURL(coord, height, width, res, filtered, crs, RGB, output_dir):
     :type height: int
     :param width: width of desired image
     :type width: int
-    :param res: resolution of used dataset (m/px)
-    :type res: int
+    :param dataset: name of desired dataset
+    :type res: str
     :param filtered: filtered dataset of images by start,end date 
     :type filtered: ee.imagecollection.ImageCollection
     :param crs: projection used
     :type crs: string
-    :param RGB: RGB bands of dataset
-    :type RGB: list of strings (e.g. ['B4', 'B3', 'B2'])
+    :param output_dir: path to output images 
+    :type output_dir: str
+    :param sharpened: whether to download pansharpened images
+    :type sharpened: bool
+    :param panchromatic_band: name of panchromatic band (if available)
+    :type panchromatic_band: str
     """
     lat = coord[0]
     lon = coord[1]
     description = f"image_{lat}_{lon}"
+    res = dico[dataset]['resolution']
     xMin, xMax, yMin, yMax = boundingBox(lat, lon, height, res)
     geometry = ee.Geometry.Rectangle([[xMin, yMin], [xMax, yMax]])
     filtered = filtered.filterBounds(geometry)
     image = filtered.median().clip(geometry)
+    RGB = dico[dataset]['RGB']
+    _min = dico[dataset]['min']
+    _max = dico[dataset]['max']
+    image = image.visualize(bands=RGB, min=_min, max=_max)
+
+    if sharpened:
+        try:
+            hsv = image.select(RGB).rgbToHsv()
+            # Swap in the panchromatic band and convert back to RGB.
+            # specific to Landsat as NAIP and Sentinel don't have a panchromatic band.
+            sharpened = ee.Image.cat(
+                [hsv.select('hue'),
+                 hsv.select('saturation'),
+                 image.select(panchromatic_band)]).hsvToRgb()
+        except Exception as e:
+            print(e)
+            logging.exception(e)
+
     band_names = image.bandNames()
     bands_list = band_names.getInfo()
+
     # Only attempt URL generation if image has all RGB bands
     if all(band in bands_list for band in RGB):
         try:
@@ -97,12 +112,27 @@ def generateURL(coord, height, width, res, filtered, crs, RGB, output_dir):
                 'fileNamePrefix': description,
                 'crs': crs,
                 'fileFormat': 'GEO_TIFF',
-                'bands': RGB,
                 'region': geometry,
                 'format': 'GEO_TIFF',
                 'dimensions': [height, width]
             })
+            if sharpened:
+                try:
+                    sharpe_url = sharpened.getDownloadUrl({
+                        'description': "sharpened"+description,
+                        'region': geometry,
+                        'fileNamePrefix': "sharpened"+description,
+                        'crs': crs,
+                        'fileFormat': 'GEO_TIFF',
+                        'region': geometry,
+                        'format': 'GEO_TIFF',
+                        'dimensions': [height, width]
+                    })
+                except Exception as e:
+                    print(e)
+                    logging.exception(e)
         except Exception as e:
+            print(e)
             logging.exception(e)
             pass
         try:
@@ -113,7 +143,18 @@ def generateURL(coord, height, width, res, filtered, crs, RGB, output_dir):
             with open(os.path.join(output_dir, f'{description}.tif'), 'wb') as fd:
                 fd.write(response.content)
             logging.info(f'Done: {description}')
+
+            if sharpened:
+                # download sharpened image given URL
+                sharpe_response = requests.get(sharpe_url)
+                if sharpe_response.status_code != 200:
+                    raise sharpe_response.raise_for_status()
+                with open(os.path.join(output_dir, f'sharpened_{description}.tif'), 'wb') as fd:
+                    fd.write(sharpe_response.content)
+                logging.info(f'Done: sharpened_{description}')
+
         except Exception as e:
+            print(e)
             logging.exception(e)
             pass
 
@@ -126,45 +167,52 @@ if __name__ == "__main__":
 
     #  initialize GEE using project's service account and JSON key
     service_account = 'climateeye@ee-saad-spike.iam.gserviceaccount.com'
-    credentials = ee.ServiceAccountCredentials(
-        service_account, '/home/sl636/climateEye/ee-saad-spike-b059a4c480f6.json')
+    # specify path to json key
+    json_path = '/home/sl636/climateEye/ee-saad-spike-b059a4c480f6.json'
     ee.Initialize(
-        opt_url='https://earthengine-highvolume.googleapis.com', credentials=credentials)
+        ee.ServiceAccountCredentials(service_account, json_path), opt_url='https://earthengine-highvolume.googleapis.com')
     logging.basicConfig()
 
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file",  type=str)
-    parser.add_argument("-d", "--dataset", help="dataset to pull images from",
-                        default=ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), type=ee.imagecollection.ImageCollection)
+                        help="path to coordinates csv file", default='/home/sl636/climateEye/san_fran.csv',  type=str)
+    parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
+                        default="sentinel", type=str)
     parser.add_argument(
-        "-r", "--resolution", help='resolution of passed dataset (in m/px)', default=30, type=int)
+        "-s", "--start_date", help="start date for getting images", default='2021-12-21', type=str)
     parser.add_argument(
-        "-s", "--start_date", help="start date for getting images", default='2017-01-01', type=str)
-    parser.add_argument(
-        "-e", "--end_date", help="end date for getting images", default='2018-01-01', type=str)
-    parser.add_argument("-b", "--bands", help="list of desired bands",
-                        default=['B2', 'B3', 'B4', 'B5'], type=list)
+        "-e", "--end_date", help="end date for getting images", default='2022-03-20', type=str)
     parser.add_argument(
         "-he", "--height", help="height of output images (in px)", default=512, type=int)
     parser.add_argument(
         "-w", "--width", help="width of output images (in px)", default=512, type=int)
     parser.add_argument(
-        "-o", "--output_dir", help="path to output directory", default="data/", type=str)
-
+        "-o", "--output_dir", help="path to output directory", default="exported_images/", type=str)
+    parser.add_argument(
+        "-sh", "--sharpened", help="download pan-sharpened image (only available for Landsat)", default=False, type=bool)
     args = parser.parse_args()
-
+    print(args)
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-        pass
+    pass
 
     # loops over all coords in csv, fetches URL of desired image, and appends it to URL.txt
-    lat_lon_only = partial(generateURL, height=args.height, width=args.width,
-                           res=dict[args.dataset]['resolution'],
-                           filtered=args.dataset.filterDate(
-                               args.start_date, args.end_date),
-                           crs='EPSG:3857', RGB=args.bands, output=args.output_dir)
 
+    dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'min': 0.0, 'max': 0.4},
+            'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'min': 0.0, 'max': 255.0},
+            'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'min': 0.0, 'max': 4500.0}}
+
+    lat_lon_only = partial(generateURL,
+                           height=args.height,
+                           width=args.width,
+                           res=dico[args.dataset]['resolution'],
+                           dataset=args.dataset,
+                           filtered=dico[args.dataset]['dataset'].filterDate(
+                               args.start_date, args.end_date),
+                           crs='EPSG:3857',
+                           RGB=args.bands,
+                           output_dir=args.output_dir,
+                           sharpened=args.sharpened)
     with open(args.filepath, 'r') as coords_file:
         next(coords_file)
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
@@ -182,5 +230,8 @@ if __name__ == "__main__":
     num_downloaded = len([name for name in os.listdir(
         DIR) if os.path.isfile(os.path.join(DIR, name))])
     num_requested = len(pd.read_csv(args.filepath))
-    print(
-        f'Export complete! It took {duration:.2f} s ({duration/60:.2f} min) to download {num_downloaded} images out of {num_requested} requested')
+    result = f'Export complete! It took {duration:.2f} s ({duration/60:.2f} min) to download {num_downloaded} images out of {2*num_requested if args.sharpened else num_requested} requested'
+
+    print(result)
+    with open('results.txt', 'a') as f:
+        f.write(result+'\n')
