@@ -179,13 +179,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "-sh", "--sharpened", help="download pan-sharpened image (only available for Landsat)", default=False, type=bool)
     args = parser.parse_args()
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-    pass
-
-    dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
-            'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
-            'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
     logging.basicConfig(
         filename=f'{args.dataset}_logger.log',
@@ -193,6 +186,16 @@ if __name__ == "__main__":
         level="INFO",
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
+
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+        logging.info(f"Directory {args.output_dir} created")
+    else:
+        print("Please delete output directory before retrying")
+
+    dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
+            'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
+            'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
     lat_lon_only = partial(generateURL,
                            height=args.height,
@@ -216,6 +219,8 @@ if __name__ == "__main__":
     for i in range(0, len(data), 10000):
         pool = multiprocessing.Pool()
         export_start_time = time.time()
+        print(f"Starting rows: {i} to {i+10000}")
+        logging.info(f"Starting rows: {i} to {i+10000}")
         pool.map(lat_lon_only, data[i:i+10000])
         export_finish_time = time.time()
         pool.close()
