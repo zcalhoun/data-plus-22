@@ -38,7 +38,7 @@ def boundingBox(lat, lon, size, res):
     earth_radius = 6371000
     angular_distance = math.degrees(0.5 * ((size * res) / earth_radius))
     osLat = angular_distance
-    osLon = angular_distance  # / math.cos(math.radians(lat))
+    osLon = angular_distance
     xMin = lon - osLon
     xMax = lon + osLon
     yMin = lat - osLat
@@ -48,6 +48,28 @@ def boundingBox(lat, lon, size, res):
 
 @retry(tries=10, delay=2, backoff=2)
 def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpened=False):
+    """ generates the URL from Google Earth Engine of the image
+    at coordinates coord, from filtered dataset and saves tif file
+    to output_dir
+
+    :param coord: longitude and latitude of desired image
+    :type coord: tuple or list
+    :param height: desired output image height 
+    :type height: int
+    :param width: desired output image width 
+    :type width: int
+    :param dataset: name of dataset (landsat, sentinel, naip)
+    :type dataset: str
+    :param filtered: filtered Earth Engine dataset (by date)
+    :type filtered: ee.ImageCollection()
+    :param crs: projection of the image (e.g. EPSG:3857)
+    :type crs: str
+    :param output_dir: path of output directory
+    :type output_dir: str
+    :param sharpened: whether we also download pansharpened images too
+    :type sharpened: bool
+    """
+
     lon = coord[0]
     lat = coord[1]
     description = f"{dataset}_image_{lat}_{lon}"
@@ -55,6 +77,10 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
     xMin, xMax, yMin, yMax = boundingBox(lat, lon, height, res)
     geometry = ee.Geometry.Rectangle([[xMin, yMin], [xMax, yMax]])
     filtered = filtered.filterBounds(geometry)
+    if dataset == 'sentinel':
+        cloud_pct = 10
+        filtered = filtered.filter(ee.Filter.lte(
+            'CLOUDY_PIXEL_PERCENTAGE', cloud_pct))
     image = filtered.median().clip(geometry)
     RGB = dico[dataset]['RGB']
     _min = dico[dataset]['min']
@@ -83,7 +109,6 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
             logging.info(f'Done: {description}')
 
         except Exception as e:
-            print(e)
             logging.exception(e)
 
         panchromatic_band = dico[dataset]['panchromatic']
@@ -97,7 +122,6 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
                      hsv.select('saturation'),
                      image.select(panchromatic_band)]).hsvToRgb()
             except Exception as e:
-                print(e)
                 logging.exception(e)
                 pass
 
@@ -121,7 +145,6 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
                 logging.info(f'Done: sharpened_{description}')
 
             except Exception as e:
-                print(e)
                 logging.exception(e)
                 pass
 
@@ -133,25 +156,26 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
 if __name__ == "__main__":
 
     #  initialize GEE using project's service account and JSON key
-    service_account = 'climateeye@ee-saad-spike.iam.gserviceaccount.com'
+    service_account = "climateeye@ee-saad-spike.iam.gserviceaccount.com"
+    json_key = "/home/sl636/climateEye/ee-saad-spike-b059a4c480f6.json"
     ee.Initialize(
-        ee.ServiceAccountCredentials(service_account, '/home/sl636/climateEye/ee-saad-spike-b059a4c480f6.json'), opt_url='https://earthengine-highvolume.googleapis.com')
+        ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
 
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='/home/sl636/climateEye/no_antarctica_10000.csv',  type=str)
+                        help="path to coordinates csv file", default='/home/sl636/coordinates_generated_10000000-3.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
-                        default="landsat", type=str)
+                        default="sentinel", type=str)
     parser.add_argument(
-        "-s", "--start_date", help="start date for getting images", default='2020-03-21', type=str)
+        "-s", "--start_date", help="start date for getting images", default='2022-03-21', type=str)
     parser.add_argument(
-        "-e", "--end_date", help="end date for getting images", default='2020-06-20', type=str)
+        "-e", "--end_date", help="end date for getting images", default='2022-06-20', type=str)
     parser.add_argument(
         "-he", "--height", help="height of output images (in px)", default=512, type=int)
     parser.add_argument(
         "-w", "--width", help="width of output images (in px)", default=512, type=int)
     parser.add_argument(
-        "-o", "--output_dir", help="path to output directory", default="landsat_images/", type=str)
+        "-o", "--output_dir", help="path to output directory", default="output_images/", type=str)
     parser.add_argument(
         "-sh", "--sharpened", help="download pan-sharpened image (only available for Landsat)", default=False, type=bool)
     args = parser.parse_args()
@@ -159,14 +183,16 @@ if __name__ == "__main__":
         os.makedirs(args.output_dir)
     pass
 
-    # loops over all coords in csv, fetches URL of desired image, and appends it to URL.txt
-
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
             'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
     logging.basicConfig(
-        filename=f'{args.dataset}_logger.log')
+        filename=f'{args.dataset}_logger.log',
+        filemode="w",
+        level="INFO",
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
 
     lat_lon_only = partial(generateURL,
                            height=args.height,
@@ -177,22 +203,28 @@ if __name__ == "__main__":
                            crs='EPSG:3857',
                            output_dir=args.output_dir,
                            sharpened=args.sharpened)
+
     with open(args.filepath, 'r') as coords_file:
         next(coords_file)
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
 
-    pool = multiprocessing.Pool()
-    export_start_time = time.time()
-    pool.map(lat_lon_only, data)
-    export_finish_time = time.time()
-    pool.close()
-    pool.join()
-
-    duration = export_finish_time - export_start_time
     DIR = args.output_dir
     num_downloaded = len([name for name in os.listdir(
         DIR) if os.path.isfile(os.path.join(DIR, name))])
+
+    for i in range(0, len(data), 10000):
+        pool = multiprocessing.Pool()
+        export_start_time = time.time()
+        pool.map(lat_lon_only, data[i:i+10000])
+        export_finish_time = time.time()
+        pool.close()
+        pool.join()
+        logging.info(f"Finished rows: {i} to {i+10000}")
+        logging.info(f"Downloaded {num_downloaded} images so far")
+        print(f"Finished rows: {i} to {i+10000}")
+
+    duration = export_finish_time - export_start_time
     num_requested = len(pd.read_csv(args.filepath))
     result = f'Export complete! It took {duration:.2f} s ({duration/60:.2f} min) to download {num_downloaded} images out of {2*num_requested if args.sharpened else num_requested} requested from {args.filepath} using the {args.dataset} dataset'
     logging.info(result)
