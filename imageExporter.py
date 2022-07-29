@@ -115,7 +115,7 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
         if sharpened and panchromatic_band in bands_list:
             try:
                 hsv = image.select(RGB).rgbToHsv()
-                # Swap in the panchromatic band and convert back to RGB.
+                # swap in the panchromatic band and convert back to RGB.
                 # specific to Landsat as NAIP and Sentinel don't have a panchromatic band.
                 sharpened = ee.Image.cat(
                     [hsv.select('hue'),
@@ -155,12 +155,14 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
 
 if __name__ == "__main__":
 
-    #  initialize GEE using project's service account and JSON key
-    service_account = "climateeye@ee-saad-spike.iam.gserviceaccount.com"
-    json_key = "/home/sl636/climateEye/ee-saad-spike-b059a4c480f6.json"
+    # initialize GEE using project's service account and JSON key
+    service_account = "TODO: YOUR SERVICE ACCOUNT HERE"
+    json_key = "TODO: PATH TO YOUR JSON KEY HERE"
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
 
+
+    # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
                         help="path to coordinates csv file", default='/home/sl636/coordinates_generated_10000000-3.csv',  type=str)
@@ -192,11 +194,13 @@ if __name__ == "__main__":
         logging.info(f"Directory {args.output_dir} created")
     else:
         print("Please delete output directory before retrying")
+        
 
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
             'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
+    # use partial to pre-fill function with fixed arguments 
     lat_lon_only = partial(generateURL,
                            height=args.height,
                            width=args.width,
@@ -207,15 +211,17 @@ if __name__ == "__main__":
                            output_dir=args.output_dir,
                            sharpened=args.sharpened)
 
+    # assume the first line on the csv is lon, lat and skip it
     with open(args.filepath, 'r') as coords_file:
         next(coords_file)
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
 
-    DIR = args.output_dir
-    num_downloaded = len([name for name in os.listdir(
-        DIR) if os.path.isfile(os.path.join(DIR, name))])
-
+    # consider each 10k coordinates seperately 
+    # this is done to serve as checkpoints in case the code crashes
+    # that way, we can remove the already downloaded coordinates from the csv
+    # and restart the code
+    
     for i in range(0, len(data), 10000):
         pool = multiprocessing.Pool()
         export_start_time = time.time()
@@ -225,6 +231,9 @@ if __name__ == "__main__":
         export_finish_time = time.time()
         pool.close()
         pool.join()
+        DIR = args.output_dir
+        num_downloaded = len([name for name in os.listdir(
+        DIR) if os.path.isfile(os.path.join(DIR, name))])
         logging.info(f"Finished rows: {i} to {i+10000}")
         logging.info(f"Downloaded {num_downloaded} images so far")
         print(f"Finished rows: {i} to {i+10000}")
