@@ -217,6 +217,11 @@ if __name__ == "__main__":
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
 
+    # consider each 10k coordinates seperately 
+    # this is done to serve as checkpoints in case the code crashes
+    # that way, we can remove the already downloaded coordinates from the csv
+    # and restart the code
+    
     for i in range(0, len(data), 10000):
         pool = multiprocessing.Pool()
         export_start_time = time.time()
