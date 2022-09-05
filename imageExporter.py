@@ -17,6 +17,7 @@ import multiprocessing
 import os
 import csv
 from functools import partial
+import sys
 
 
 def boundingBox(lat, lon, size, res):
@@ -193,6 +194,7 @@ if __name__ == "__main__":
         logging.info(f"Directory {args.output_dir} created")
     else:
         print("Please delete output directory before retrying")
+        sys.exit()
 
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
