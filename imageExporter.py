@@ -161,7 +161,6 @@ if __name__ == "__main__":
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
 
-
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
@@ -194,13 +193,12 @@ if __name__ == "__main__":
         logging.info(f"Directory {args.output_dir} created")
     else:
         print("Please delete output directory before retrying")
-        
 
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
             'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
-    # use partial to pre-fill function with fixed arguments 
+    # use partial to pre-fill function with fixed arguments
     lat_lon_only = partial(generateURL,
                            height=args.height,
                            width=args.width,
@@ -217,26 +215,37 @@ if __name__ == "__main__":
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
 
-    # consider each 10k coordinates seperately 
+    export_start_time = time.time()
+    for i in range(0, len(data)):
+        lat_lon_only(data[i])
+    export_finish_time = time.time()
+    DIR = args.output_dir
+    num_downloaded = len([name for name in os.listdir(
+        DIR) if os.path.isfile(os.path.join(DIR, name))])
+    logging.info(f"Downloaded {num_downloaded} images so far")
+
+    # consider each 10k coordinates seperately
     # this is done to serve as checkpoints in case the code crashes
     # that way, we can remove the already downloaded coordinates from the csv
     # and restart the code
-    
-    for i in range(0, len(data), 10000):
-        pool = multiprocessing.Pool()
-        export_start_time = time.time()
-        print(f"Starting rows: {i} to {i+10000}")
-        logging.info(f"Starting rows: {i} to {i+10000}")
-        pool.map(lat_lon_only, data[i:i+10000])
-        export_finish_time = time.time()
-        pool.close()
-        pool.join()
-        DIR = args.output_dir
-        num_downloaded = len([name for name in os.listdir(
-        DIR) if os.path.isfile(os.path.join(DIR, name))])
-        logging.info(f"Finished rows: {i} to {i+10000}")
-        logging.info(f"Downloaded {num_downloaded} images so far")
-        print(f"Finished rows: {i} to {i+10000}")
+
+# Multiprocessing is used to make use of all available CPUs and download a large amount of images much faster
+
+    # for i in range(0, len(data), 10000):
+    #     pool = multiprocessing.Pool()
+    #     export_start_time = time.time()
+    #     print(f"Starting rows: {i} to {i+10000}")
+    #     logging.info(f"Starting rows: {i} to {i+10000}")
+    #     pool.map(lat_lon_only, data[i:i+10000])
+    #     export_finish_time = time.time()
+    #     pool.close()
+    #     pool.join()
+    #     DIR = args.output_dir
+    #     num_downloaded = len([name for name in os.listdir(
+    #     DIR) if os.path.isfile(os.path.join(DIR, name))])
+    #     logging.info(f"Finished rows: {i} to {i+10000}")
+    #     logging.info(f"Downloaded {num_downloaded} images so far")
+    #     print(f"Finished rows: {i} to {i+10000}")
 
     duration = export_finish_time - export_start_time
     num_requested = len(pd.read_csv(args.filepath))
