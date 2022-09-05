@@ -1,6 +1,6 @@
 # data-plus-22
 In this repository, the tool we wrote to download satellite images can be found under `imageExporter.py`. The tool requires a .csv file containing desired coordinates, the dataset to download images from (Sentinel, NAIP, Landsat), the desired dimensions of the output images, the output directory path, and whether
-images should be pansharpened (only available for Landsat).
+images should be pansharpened (only available for Landsat). 
 
 Details on how to use `imageExporter.py' can be found below:
 
@@ -10,7 +10,7 @@ usage: imageExported.py [-h] [-f FILEPATH] [-d DATASET] [-s START_DATE] [-e END_
 options:
   -h, --help            show this help message and exit
   -f FILEPATH, --filepath FILEPATH
-                        path to coordinates csv file
+                        path to coordinates csv file (assumptions: 2 columns only, top row: lon, lat)
   -d DATASET, --dataset DATASET
                         name of dataset to pull images from (sentinel, landsat, or naip)
   -s START_DATE, --start_date START_DATE
@@ -28,11 +28,20 @@ options:
                         
 ```
 
+Since all arguments are set by default, the most basic way of running the code would be: 
+
+```
+python imageExporter.py -f FILEPATH
+```
+
+with FILEPATH replaced by the path to the desired coordinates csv file.
+
 To run the tool, the user needs to have a personal or service account (we use a service account) to authenticate to Google Earth Engine, as well as a private JSON for that account. Instructions on how to create a service account can be found here: [Create Service Account](https://developers.google.com/earth-engine/guides/service_account#create-a-service-account). This link provides instructions to create the private JSON key: [Create JSON Key for Service Account](https://developers.google.com/earth-engine/guides/service_account#create-a-private-key-for-the-service-account).
 
 Another requirement of the program is to install the Google Earth Engine. Instructions on how to do so can be found here: [Earth Engine Installation](https://developers.google.com/earth-engine/guides/python_install#install-options).
 
-To install the rest of the required packages, the user can create a conda environment similar to the one we use. Our environment file can be found in `ee_env.yml`.
+To install the rest of the required packages, the user can create a conda environment similar to the one we use. Our environment file can be found in `ee_env.yml`. Installing a conda environment using a yml file is done through: conda env create -f YML_FILE_NAME 
+UPDATE: Some users reported issues using `ee_env.yml`. The issue was likely caused by build versions. We include another environment file `ee_env_no_builds.yml` to resolve that issue.
 
 # Sampling Code
 The sampling code can be found in the file, Sampling_from_Cities.ipynb, located in notebooks folder, main branch.
