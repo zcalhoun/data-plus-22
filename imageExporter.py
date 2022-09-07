@@ -165,7 +165,7 @@ if __name__ == "__main__":
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='/home/sl636/coordinates_generated_10000000-3.csv',  type=str)
+                        help="path to coordinates csv file", default='data-plus-22/us-state-capitals.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
                         default="sentinel", type=str)
     parser.add_argument(
@@ -217,37 +217,28 @@ if __name__ == "__main__":
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
 
-    export_start_time = time.time()
-    for i in range(0, len(data)):
-        lat_lon_only(data[i])
-    export_finish_time = time.time()
-    DIR = args.output_dir
-    num_downloaded = len([name for name in os.listdir(
-        DIR) if os.path.isfile(os.path.join(DIR, name))])
-    logging.info(f"Downloaded {num_downloaded} images so far")
-
     # consider each 10k coordinates seperately
     # this is done to serve as checkpoints in case the code crashes
     # that way, we can remove the already downloaded coordinates from the csv
     # and restart the code
 
 # Multiprocessing is used to make use of all available CPUs and download a large amount of images much faster
-
-    # for i in range(0, len(data), 10000):
-    #     pool = multiprocessing.Pool()
-    #     export_start_time = time.time()
-    #     print(f"Starting rows: {i} to {i+10000}")
-    #     logging.info(f"Starting rows: {i} to {i+10000}")
-    #     pool.map(lat_lon_only, data[i:i+10000])
-    #     export_finish_time = time.time()
-    #     pool.close()
-    #     pool.join()
-    #     DIR = args.output_dir
-    #     num_downloaded = len([name for name in os.listdir(
-    #     DIR) if os.path.isfile(os.path.join(DIR, name))])
-    #     logging.info(f"Finished rows: {i} to {i+10000}")
-    #     logging.info(f"Downloaded {num_downloaded} images so far")
-    #     print(f"Finished rows: {i} to {i+10000}")
+    inc = min(10000, len(data))
+    for i in range(0, len(data), inc):
+        pool = multiprocessing.Pool()
+        export_start_time = time.time()
+        print(f"Starting rows: {i} to {i+inc}")
+        logging.info(f"Starting rows: {i} to {i+inc}")
+        pool.map(lat_lon_only, data[i:i+inc])
+        export_finish_time = time.time()
+        pool.close()
+        pool.join()
+        DIR = args.output_dir
+        num_downloaded = len([name for name in os.listdir(
+            DIR) if os.path.isfile(os.path.join(DIR, name))])
+        logging.info(f"Finished rows: {i} to {i+inc}")
+        logging.info(f"Downloaded {num_downloaded} images so far")
+        print(f"Finished rows: {i} to {i+inc}")
 
     duration = export_finish_time - export_start_time
     num_requested = len(pd.read_csv(args.filepath))
