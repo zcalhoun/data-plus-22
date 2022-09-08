@@ -157,8 +157,8 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
 if __name__ == "__main__":
 
     # initialize GEE using project's service account and JSON key
-    service_account = "climateeye@ee-saad-spike.iam.gserviceaccount.com"
-    json_key = "/home/sl636/data-plus-22/ee-saad-spike-b059a4c480f6.json"
+    service_account = "TODO: YOUR SERVICE ACCOUNT HERE"
+    json_key = "TODO: PATH TO YOUR JSON KEY HERE"
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
 
