@@ -157,15 +157,15 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
 if __name__ == "__main__":
 
     # initialize GEE using project's service account and JSON key
-    service_account = "TODO: YOUR SERVICE ACCOUNT HERE"
-    json_key = "TODO: PATH TO YOUR JSON KEY HERE"
+    service_account = "climateeye@ee-saad-spike.iam.gserviceaccount.com"
+    json_key = "/home/sl636/data-plus-22/ee-saad-spike-b059a4c480f6.json"
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
 
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='data-plus-22/us-state-capitals.csv',  type=str)
+                        help="path to coordinates csv file", default='./us-state-capitals.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
                         default="sentinel", type=str)
     parser.add_argument(
