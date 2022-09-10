@@ -17,7 +17,6 @@ import multiprocessing
 import os
 import csv
 from functools import partial
-import sys
 
 
 def boundingBox(lat, lon, size, res):
@@ -157,15 +156,16 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
 if __name__ == "__main__":
 
     # initialize GEE using project's service account and JSON key
-    service_account = "TODO: YOUR SERVICE ACCOUNT HERE"
-    json_key = "TODO: PATH TO YOUR JSON KEY HERE"
+    service_account = "sentinel2@ben-ren-watttime-project-2022.iam.gserviceaccount.com"
+    json_key = "../gee_key.json"
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
+
 
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='./us-state-capitals.csv',  type=str)
+                        help="path to coordinates csv file", default='/home/sr365/data-plus-22/durham_cordinate.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
                         default="sentinel", type=str)
     parser.add_argument(
@@ -180,7 +180,17 @@ if __name__ == "__main__":
         "-o", "--output_dir", help="path to output directory", default="output_images/", type=str)
     parser.add_argument(
         "-sh", "--sharpened", help="download pan-sharpened image (only available for Landsat)", default=False, type=bool)
+    # parser.add_argument(
+    #     "-p", "--parallel", help="using parallel multi-processing", default=True, type=bool)
+    parser.add_argument('--parallel', action='store_true')
+    parser.add_argument('--no-parallel', dest='parallel', action='store_false')
+    parser.set_defaults(parallel=True)
+    parser.add_argument(
+        "-pn", "--parallel_number", help="number of parallel processes", default=10, type=int)
+
     args = parser.parse_args()
+
+    print(args)
 
     logging.basicConfig(
         filename=f'{args.dataset}_logger.log',
@@ -194,13 +204,13 @@ if __name__ == "__main__":
         logging.info(f"Directory {args.output_dir} created")
     else:
         print("Please delete output directory before retrying")
-        sys.exit()
+        
 
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
             'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
-    # use partial to pre-fill function with fixed arguments
+    # use partial to pre-fill function with fixed arguments 
     lat_lon_only = partial(generateURL,
                            height=args.height,
                            width=args.width,
@@ -217,28 +227,42 @@ if __name__ == "__main__":
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
 
-    # consider each 10k coordinates seperately
+    # consider each 10k coordinates seperately 
     # this is done to serve as checkpoints in case the code crashes
     # that way, we can remove the already downloaded coordinates from the csv
     # and restart the code
-
-# Multiprocessing is used to make use of all available CPUs and download a large amount of images much faster
-    inc = min(10000, len(data))
-    for i in range(0, len(data), inc):
-        pool = multiprocessing.Pool()
-        export_start_time = time.time()
-        print(f"Starting rows: {i} to {i+inc}")
-        logging.info(f"Starting rows: {i} to {i+inc}")
-        pool.map(lat_lon_only, data[i:i+inc])
-        export_finish_time = time.time()
-        pool.close()
-        pool.join()
-        DIR = args.output_dir
-        num_downloaded = len([name for name in os.listdir(
+    
+    if args.parallel:
+        pn = args.parallel_number
+        for i in tqdm(range(0, len(data), pn)):
+            pool = multiprocessing.Pool()
+            export_start_time = time.time()
+            print(f"Starting rows: {i} to {i+pn}")
+            logging.info(f"Starting rows: {i} to {i+pn}")
+            pool.map(lat_lon_only, data[i:i+pn])
+            export_finish_time = time.time()
+            pool.close()
+            pool.join()
+            DIR = args.output_dir
+            num_downloaded = len([name for name in os.listdir(
             DIR) if os.path.isfile(os.path.join(DIR, name))])
-        logging.info(f"Finished rows: {i} to {i+inc}")
-        logging.info(f"Downloaded {num_downloaded} images so far")
-        print(f"Finished rows: {i} to {i+inc}")
+            logging.info(f"Finished rows: {i} to {i+pn}")
+            logging.info(f"Downloaded {num_downloaded} images so far")
+            print(f"Finished rows: {i} to {i+pn}")
+    else:
+        export_start_time = time.time()
+        for i in tqdm(range(len(data))):
+            # Call the download function
+            lat_lon_only(data[i])
+            # Sleep for 1 second to ensure google quota issue
+            time.sleep(1)            
+            DIR = args.output_dir
+            num_downloaded = len([name for name in os.listdir(
+            DIR) if os.path.isfile(os.path.join(DIR, name))])
+            logging.info(f"Finished rows: {i}")
+            logging.info(f"Downloaded {num_downloaded} images so far")
+            print(f"Finished rows: {i}")
+        export_finish_time = time.time()
 
     duration = export_finish_time - export_start_time
     num_requested = len(pd.read_csv(args.filepath))
