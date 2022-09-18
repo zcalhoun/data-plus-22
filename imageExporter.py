@@ -187,7 +187,9 @@ if __name__ == "__main__":
     parser.set_defaults(parallel=True)
     parser.add_argument(
         "-pn", "--parallel_number", help="number of parallel processes", default=10, type=int)
-
+    parser.add_argument('--redownload', action='store_true')
+    parser.add_argument('--no-redownload', dest='parallel', action='store_false')
+    parser.set_defaults(redownload=False)
     args = parser.parse_args()
 
     print(args)
@@ -226,6 +228,18 @@ if __name__ == "__main__":
         next(coords_file)
         coords = csv.reader(coords_file, quoting=csv.QUOTE_NONNUMERIC)
         data = list(coords)
+
+    # The extra step that only download those that are not present
+    if not args.redownload:
+        print('The original lenght of coordinate is:', len(data))
+        filelist = os.listdir(args.output_dir)
+        for file in filelist:
+            split_file_name = file.replace('.tif','').split('_')
+            lat = float(split_file_name[2])
+            lon = float(split_file_name[3])
+            lon_lat_list = [lon, lat]
+            data.remove(lon_lat_list)
+        print('After removing the ones already downloaded, now there are {} coordinates left'.format(len(data)))
 
     # consider each 10k coordinates seperately 
     # this is done to serve as checkpoints in case the code crashes
