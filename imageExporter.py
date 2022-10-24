@@ -17,6 +17,8 @@ import multiprocessing
 import os
 import csv
 from functools import partial
+import random
+from datetime import datetime
 
 
 def boundingBox(lat, lon, size, res):
@@ -73,6 +75,8 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
     lon = coord[0]
     lat = coord[1]
     description = f"{dataset}_image_{lat}_{lon}"
+    start, end = pickRandomBucket(args.start_date, args.end_date, args.buckets)
+    filtered.filterDate(start, end)
     res = dico[dataset]['resolution']
     xMin, xMax, yMin, yMax = boundingBox(lat, lon, height, res)
     geometry = ee.Geometry.Rectangle([[xMin, yMin], [xMax, yMax]])
@@ -153,25 +157,39 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
         pass
 
 
+def pickRandomBucket(start_date, end_date, buckets):
+    start = datetime.strptime(start_date, '%Y-%m-%d')
+    end = datetime.strptime(end_date, '%Y-%m-%d')
+    bucket_length = (end-start)/buckets
+
+    bucket_list = [(start+i*bucket_length).date() for i in range(0, buckets+1)]
+
+    start_idx = random.randint(0, buckets-1)
+
+    new_start = bucket_list[start_idx]
+    new_end = bucket_list[start_idx+1]
+
+    return new_start, new_end
+
+
 if __name__ == "__main__":
 
     # initialize GEE using project's service account and JSON key
-    service_account = "sentinel2@ben-ren-watttime-project-2022.iam.gserviceaccount.com"
-    json_key = "../gee_key.json"
+    service_account = "climateeye@ee-saad-spike.iam.gserviceaccount.com"
+    json_key = "/home/sl636/data-plus-22/ee-saad-spike-b059a4c480f6.json"
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
-
 
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='/home/sr365/data-plus-22/durham_cordinate.csv',  type=str)
+                        help="path to coordinates csv file", default='/home/sl636/data-plus-22/us-state-capitals.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
                         default="sentinel", type=str)
     parser.add_argument(
-        "-s", "--start_date", help="start date for getting images", default='2022-03-21', type=str)
+        "-s", "--start_date", help="start date for getting images", default='2021-01-01', type=str)
     parser.add_argument(
-        "-e", "--end_date", help="end date for getting images", default='2022-06-20', type=str)
+        "-e", "--end_date", help="end date for getting images", default='2022-01-01', type=str)
     parser.add_argument(
         "-he", "--height", help="height of output images (in px)", default=512, type=int)
     parser.add_argument(
@@ -180,6 +198,8 @@ if __name__ == "__main__":
         "-o", "--output_dir", help="path to output directory", default="output_images/", type=str)
     parser.add_argument(
         "-sh", "--sharpened", help="download pan-sharpened image (only available for Landsat)", default=False, type=bool)
+    parser.add_argument(
+        "-b", "--buckets", help="number of buckets to divide the [start, end] interval in", default=1, type=int)
     # parser.add_argument(
     #     "-p", "--parallel", help="using parallel multi-processing", default=True, type=bool)
     parser.add_argument('--parallel', action='store_true')
@@ -188,7 +208,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-pn", "--parallel_number", help="number of parallel processes", default=10, type=int)
     parser.add_argument('--redownload', action='store_true')
-    parser.add_argument('--no-redownload', dest='parallel', action='store_false')
+    parser.add_argument('--no-redownload', dest='parallel',
+                        action='store_false')
     parser.set_defaults(redownload=False)
     args = parser.parse_args()
 
@@ -206,13 +227,12 @@ if __name__ == "__main__":
         logging.info(f"Directory {args.output_dir} created")
     else:
         print("Please delete output directory before retrying")
-        
 
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
             'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
-    # use partial to pre-fill function with fixed arguments 
+    # use partial to pre-fill function with fixed arguments
     lat_lon_only = partial(generateURL,
                            height=args.height,
                            width=args.width,
@@ -234,18 +254,19 @@ if __name__ == "__main__":
         print('The original lenght of coordinate is:', len(data))
         filelist = os.listdir(args.output_dir)
         for file in filelist:
-            split_file_name = file.replace('.tif','').split('_')
+            split_file_name = file.replace('.tif', '').split('_')
             lat = float(split_file_name[2])
             lon = float(split_file_name[3])
             lon_lat_list = [lon, lat]
             data.remove(lon_lat_list)
-        print('After removing the ones already downloaded, now there are {} coordinates left'.format(len(data)))
+        print('After removing the ones already downloaded, now there are {} coordinates left'.format(
+            len(data)))
 
-    # consider each 10k coordinates seperately 
+    # consider each 10k coordinates seperately
     # this is done to serve as checkpoints in case the code crashes
     # that way, we can remove the already downloaded coordinates from the csv
     # and restart the code
-    
+
     if args.parallel:
         pn = args.parallel_number
         for i in tqdm(range(0, len(data), pn)):
@@ -259,7 +280,7 @@ if __name__ == "__main__":
             pool.join()
             DIR = args.output_dir
             num_downloaded = len([name for name in os.listdir(
-            DIR) if os.path.isfile(os.path.join(DIR, name))])
+                DIR) if os.path.isfile(os.path.join(DIR, name))])
             logging.info(f"Finished rows: {i} to {i+pn}")
             logging.info(f"Downloaded {num_downloaded} images so far")
             print(f"Finished rows: {i} to {i+pn}")
@@ -269,10 +290,10 @@ if __name__ == "__main__":
             # Call the download function
             lat_lon_only(data[i])
             # Sleep for 1 second to ensure google quota issue
-            time.sleep(1)            
+            time.sleep(1)
             DIR = args.output_dir
             num_downloaded = len([name for name in os.listdir(
-            DIR) if os.path.isfile(os.path.join(DIR, name))])
+                DIR) if os.path.isfile(os.path.join(DIR, name))])
             logging.info(f"Finished rows: {i}")
             logging.info(f"Downloaded {num_downloaded} images so far")
             print(f"Finished rows: {i}")
