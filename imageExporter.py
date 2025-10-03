@@ -4,10 +4,9 @@ import ee
 import pandas as pd
 import numpy as np
 import time
-from geetools import batch
+#from geetools import batch
 from tqdm import tqdm
 from argparse import ArgumentParser
-import requests
 import math
 import logging
 import multiprocessing
@@ -17,6 +16,11 @@ import multiprocessing
 import os
 import csv
 from functools import partial
+
+def _init_ee(service_account, json_key):
+    import ee
+    ee.Initialize(ee.ServiceAccountCredentials(service_account, json_key),
+                  opt_url='https://earthengine-highvolume.googleapis.com')
 
 
 def boundingBox(lat, lon, size, res):
@@ -46,8 +50,9 @@ def boundingBox(lat, lon, size, res):
     return xMin, xMax, yMin, yMax
 
 
-@retry(tries=10, delay=2, backoff=2)
-def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpened=False):
+@retry(tries=5, delay=1, backoff=2)
+def generateURL(coord, height, width, dataset_name, resolution, rgb, vmin, vmax,
+                panchromatic, filtered, crs, output_dir, sharpened=False):
     """ generates the URL from Google Earth Engine of the image
     at coordinates coord, from filtered dataset and saves tif file
     to output_dir
@@ -70,83 +75,70 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
     :type sharpened: bool
     """
 
-    lon = coord[0]
-    lat = coord[1]
-    description = f"{dataset}_image_{lat}_{lon}"
-    res = dico[dataset]['resolution']
-    xMin, xMax, yMin, yMax = boundingBox(lat, lon, height, res)
+    lon, lat = coord
+    description = f"{dataset_name}_image_{lat}_{lon}"
+    xMin, xMax, yMin, yMax = boundingBox(lat, lon, height, resolution)
     geometry = ee.Geometry.Rectangle([[xMin, yMin], [xMax, yMax]])
     filtered = filtered.filterBounds(geometry)
-    if dataset == 'sentinel':
+    if dataset_name == 'sentinel':
         cloud_pct = 10
         filtered = filtered.filter(ee.Filter.lte(
             'CLOUDY_PIXEL_PERCENTAGE', cloud_pct))
     image = filtered.median().clip(geometry)
-    RGB = dico[dataset]['RGB']
-    _min = dico[dataset]['min']
-    _max = dico[dataset]['max']
-    band_names = image.bandNames()
-    bands_list = band_names.getInfo()
-    if all(band in bands_list for band in RGB):
-        image_vis = image.visualize(bands=RGB, min=_min, max=_max)
+    bands_list = image.bandNames().getInfo()
+    if not all(b in bands_list for b in rgb):
+        logging.info(f'Image at {(lat, lon)} missing RGB bands; has: {bands_list}')
+        return
+
+    image_vis = image.visualize(bands=rgb, min=vmin, max=vmax)
+    try:
+        url = image_vis.getDownloadURL({
+            'description': description,
+            'region': geometry,
+            'fileNamePrefix': description,
+            'crs': crs,
+            'fileFormat': 'GEO_TIFF',
+            'dimensions': [height, width]
+        })
+        # download image given URL
+        response = requests.get(url, timeout=120)
+        if response.status_code != 200:
+            raise response.raise_for_status()
+        with open(os.path.join(output_dir, f'{description}.tif'), 'wb') as fd:
+            fd.write(response.content)
+        logging.info(f'Done: {description}')
+
+    except Exception as e:
+        logging.exception(e)
+
+    if sharpened and panchromatic and panchromatic in bands_list:
         try:
-            url = image_vis.getDownloadUrl({
-                'description': description,
+            hsv = image.select(rgb).rgbToHsv()
+            # swap in the panchromatic band and convert back to RGB.
+            # specific to Landsat as NAIP and Sentinel don't have a panchromatic band.
+            sharpened_img = ee.Image.cat([hsv.select('hue'), 
+                                            hsv.select('saturation'),
+                                            image.select(panchromatic)]).hsvToRgb()
+            s_url = sharpened_img.getDownloadURL({
+                'description': "sharpened"+description, 
                 'region': geometry,
-                'fileNamePrefix': description,
+                'fileNamePrefix': "sharpened"+description,
                 'crs': crs,
                 'fileFormat': 'GEO_TIFF',
-                'region': geometry,
                 'format': 'GEO_TIFF',
                 'dimensions': [height, width]
             })
-            # download image given URL
-            response = requests.get(url)
-            if response.status_code != 200:
-                raise response.raise_for_status()
-            with open(os.path.join(output_dir, f'{description}.tif'), 'wb') as fd:
-                fd.write(response.content)
-            logging.info(f'Done: {description}')
+            s = requests.get(s_url, timeout=120)
+            if s.status_code != 200:
+                raise s.raise_for_status()
+            with open(os.path.join(output_dir, f'sharpened_{description}.tif'), 'wb') as fd:
+                fd.write(s.content)
+            logging.info(f'Done: sharpened_{description}')
+
 
         except Exception as e:
             logging.exception(e)
-
-        panchromatic_band = dico[dataset]['panchromatic']
-        if sharpened and panchromatic_band in bands_list:
-            try:
-                hsv = image.select(RGB).rgbToHsv()
-                # swap in the panchromatic band and convert back to RGB.
-                # specific to Landsat as NAIP and Sentinel don't have a panchromatic band.
-                sharpened = ee.Image.cat(
-                    [hsv.select('hue'),
-                     hsv.select('saturation'),
-                     image.select(panchromatic_band)]).hsvToRgb()
-            except Exception as e:
-                logging.exception(e)
-                pass
-
-            try:
-                sharpe_url = sharpened.getDownloadUrl({
-                    'description': "sharpened"+description,
-                    'region': geometry,
-                    'fileNamePrefix': "sharpened"+description,
-                    'crs': crs,
-                    'fileFormat': 'GEO_TIFF',
-                    'region': geometry,
-                    'format': 'GEO_TIFF',
-                    'dimensions': [height, width]
-                })
-                # download sharpened image given URL
-                sharpe_response = requests.get(sharpe_url)
-                if sharpe_response.status_code != 200:
-                    raise sharpe_response.raise_for_status()
-                with open(os.path.join(output_dir, f'sharpened_{description}.tif'), 'wb') as fd:
-                    fd.write(sharpe_response.content)
-                logging.info(f'Done: sharpened_{description}')
-
-            except Exception as e:
-                logging.exception(e)
-                pass
+            pass
 
     else:
         logging.info(f'Image at {(lat, lon)} has bands: {bands_list}')
@@ -156,8 +148,8 @@ def generateURL(coord, height, width, dataset, filtered, crs, output_dir, sharpe
 if __name__ == "__main__":
 
     # initialize GEE using project's service account and JSON key
-    service_account = "sentinel2@ben-ren-watttime-project-2022.iam.gserviceaccount.com"
-    json_key = "../gee_key.json"
+    service_account = "TODO: add your service account here"
+    json_key = "TODO: add path to your JSON key here"
     ee.Initialize(
         ee.ServiceAccountCredentials(service_account, json_key), opt_url='https://earthengine-highvolume.googleapis.com')
 
@@ -165,7 +157,7 @@ if __name__ == "__main__":
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='/home/sr365/data-plus-22/durham_cordinate.csv',  type=str)
+                        help="path to coordinates csv file", default='/data-plus-22/us-state-capitals.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
                         default="sentinel", type=str)
     parser.add_argument(
@@ -188,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-pn", "--parallel_number", help="number of parallel processes", default=10, type=int)
     parser.add_argument('--redownload', action='store_true')
-    parser.add_argument('--no-redownload', dest='parallel', action='store_false')
+    parser.add_argument('--no-redownload', dest='redownload', action='store_false')
     parser.set_defaults(redownload=False)
     args = parser.parse_args()
 
@@ -206,22 +198,30 @@ if __name__ == "__main__":
         logging.info(f"Directory {args.output_dir} created")
     else:
         print("Please delete output directory before retrying")
-        
 
     dico = {'landsat': {'dataset': ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA"), 'resolution': 30, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B5', 'panchromatic': 'B8', 'min': 0.0, 'max': 0.4},
             'naip': {'dataset':  ee.ImageCollection("USDA/NAIP/DOQQ"), 'resolution': 1, 'RGB': ['R', 'G', 'B'], 'NIR': 'N', 'panchromatic': None, 'min': 0.0, 'max': 255.0},
-            'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
+            'sentinel': {'dataset': ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED"), 'resolution': 10, 'RGB': ['B4', 'B3', 'B2'], 'NIR': 'B8', 'panchromatic': None, 'min': 0.0, 'max': 4500.0}}
 
+
+    cfg = dico[args.dataset]
+    filtered = cfg['dataset'].filterDate(args.start_date, args.end_date)
     # use partial to pre-fill function with fixed arguments 
-    lat_lon_only = partial(generateURL,
-                           height=args.height,
-                           width=args.width,
-                           dataset=args.dataset,
-                           filtered=dico[args.dataset]['dataset'].filterDate(
-                               args.start_date, args.end_date),
-                           crs='EPSG:3857',
-                           output_dir=args.output_dir,
-                           sharpened=args.sharpened)
+    lat_lon_only = partial(
+        generateURL,
+        height=args.height, 
+        width=args.width,
+        dataset_name=args.dataset,
+        resolution=cfg['resolution'],
+        rgb=cfg['RGB'], 
+        vmin=cfg['min'], 
+        vmax=cfg['max'],
+        panchromatic=cfg['panchromatic'],
+        filtered=filtered, 
+        crs='EPSG:3857',
+        output_dir=args.output_dir, 
+        sharpened=args.sharpened
+    )
 
     # assume the first line on the csv is lon, lat and skip it
     with open(args.filepath, 'r') as coords_file:
@@ -231,7 +231,7 @@ if __name__ == "__main__":
 
     # The extra step that only download those that are not present
     if not args.redownload:
-        print('The original lenght of coordinate is:', len(data))
+        print('The original length of coordinate is:', len(data))
         filelist = os.listdir(args.output_dir)
         for file in filelist:
             split_file_name = file.replace('.tif','').split('_')
@@ -248,21 +248,24 @@ if __name__ == "__main__":
     
     if args.parallel:
         pn = args.parallel_number
+        pool = multiprocessing.Pool(processes=pn,
+                                        initializer=_init_ee,
+                                        initargs=(service_account, json_key))
+        export_start_time = time.time()
         for i in tqdm(range(0, len(data), pn)):
-            pool = multiprocessing.Pool()
-            export_start_time = time.time()
             print(f"Starting rows: {i} to {i+pn}")
             logging.info(f"Starting rows: {i} to {i+pn}")
             pool.map(lat_lon_only, data[i:i+pn])
-            export_finish_time = time.time()
-            pool.close()
-            pool.join()
             DIR = args.output_dir
             num_downloaded = len([name for name in os.listdir(
             DIR) if os.path.isfile(os.path.join(DIR, name))])
             logging.info(f"Finished rows: {i} to {i+pn}")
             logging.info(f"Downloaded {num_downloaded} images so far")
             print(f"Finished rows: {i} to {i+pn}")
+        pool.close()
+        pool.join()
+        export_finish_time = time.time()
+        
     else:
         export_start_time = time.time()
         for i in tqdm(range(len(data))):
