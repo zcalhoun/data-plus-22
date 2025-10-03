@@ -92,11 +92,12 @@ def generateURL(coord, height, width, dataset_name, resolution, rgb, vmin, vmax,
 
     image_vis = image.visualize(bands=rgb, min=vmin, max=vmax)
     try:
-        url = image_vis.getDownloadURL({
+        url = image_vis.getDownloadUrl({
             'description': description,
             'region': geometry,
             'fileNamePrefix': description,
             'crs': crs,
+            'format': 'GEO_TIFF',
             'fileFormat': 'GEO_TIFF',
             'dimensions': [height, width]
         })
@@ -119,7 +120,7 @@ def generateURL(coord, height, width, dataset_name, resolution, rgb, vmin, vmax,
             sharpened_img = ee.Image.cat([hsv.select('hue'), 
                                             hsv.select('saturation'),
                                             image.select(panchromatic)]).hsvToRgb()
-            s_url = sharpened_img.getDownloadURL({
+            s_url = sharpened_img.getDownloadUrl({
                 'description': "sharpened"+description, 
                 'region': geometry,
                 'fileNamePrefix': "sharpened"+description,
@@ -157,7 +158,7 @@ if __name__ == "__main__":
     # initialize the arguments parser
     parser = ArgumentParser()
     parser.add_argument("-f", "--filepath",
-                        help="path to coordinates csv file", default='/data-plus-22/us-state-capitals.csv',  type=str)
+                        help="path to coordinates csv file", default='data-plus-22/us-state-capitals.csv',  type=str)
     parser.add_argument("-d", "--dataset", help="name of dataset to pull images from (sentinel, landsat, or naip)",
                         default="sentinel", type=str)
     parser.add_argument(
